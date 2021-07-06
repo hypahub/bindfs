@@ -40,8 +40,8 @@ typedef enum UsermapStatus {
 UserMap *usermap_create();
 void usermap_destroy(UserMap *map);
 
-UsermapStatus usermap_add_uid(UserMap *map, uid_t from, uid_t to);
-UsermapStatus usermap_add_gid(UserMap *map, gid_t from, gid_t to);
+UsermapStatus usermap_add_uid(UserMap *map, uid_t uid_from, uid_t uid_to);
+UsermapStatus usermap_add_gid(UserMap *map, uid_t uid_from, gid_t gid_from, gid_t gid_to);
 
 const char* usermap_errorstr(UsermapStatus status);
 
@@ -49,6 +49,6 @@ const char* usermap_errorstr(UsermapStatus status);
 uid_t usermap_get_uid_or_default(UserMap *map, uid_t u, uid_t deflt);
 
 /* Returns the gid that g is mapped to, or deflt if none. */
-gid_t usermap_get_gid_or_default(UserMap *map, gid_t g, gid_t deflt);
+gid_t usermap_get_gid_or_default(UserMap *map, uid_t u, gid_t g, gid_t deflt);
 
 #endif

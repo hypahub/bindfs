@@ -56,3 +56,5 @@ vagrant/*/.vagrant
 
 /.idea
 /.vscode
+
+/build

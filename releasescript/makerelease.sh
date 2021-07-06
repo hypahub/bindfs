@@ -6,7 +6,7 @@ if [ -z "$1" ]; then
 fi
 
 VERSION="$1"
-REPO_URL="git://github.com/mpartel/bindfs.git"
+REPO_URL="${0%/*}/.."
 
 umask 0022
 
@@ -26,7 +26,6 @@ git clone "$REPO_URL" "bindfs-$VERSION"
 # - remove .git
 # - run autotools
 pushd "bindfs-$VERSION"
-git checkout "$VERSION"
 rm -Rf .git
 ./autogen.sh
 rm -Rf autom4te.cache

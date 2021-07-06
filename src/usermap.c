@@ -4,10 +4,13 @@
 #include <stdlib.h>
 
 struct UserMap {
-    uid_t *user_from;
-    uid_t *user_to;
-    gid_t *group_from;
-    gid_t *group_to;
+    uid_t *user_uid_from;
+    uid_t *user_uid_to;
+
+    uid_t *group_uid_from;
+    gid_t *group_gid_from;
+    gid_t *group_gid_to;
+
     int user_capacity;
     int group_capacity;
     int user_size;
@@ -17,10 +20,9 @@ struct UserMap {
 UserMap *usermap_create()
 {
     UserMap* map = (UserMap*)malloc(sizeof(UserMap));
-    map->user_from = NULL;
-    map->user_to = NULL;
-    map->group_from = NULL;
-    map->group_to = NULL;
+    map->user_uid_from = NULL;
+    map->user_uid_to = NULL;
+    map->group_uid_from = NULL;
     map->user_capacity = 0;
     map->group_capacity = 0;
     map->user_size = 0;
@@ -30,10 +32,11 @@ UserMap *usermap_create()
 
 void usermap_destroy(UserMap *map)
 {
-    free(map->user_from);
-    free(map->user_to);
-    free(map->group_from);
-    free(map->group_to);
+    free(map->user_uid_from);
+    free(map->user_uid_to);
+    free(map->group_uid_from);
+    free(map->group_gid_from);
+    free(map->group_gid_to);
     free(map);
 }
 
@@ -49,23 +52,23 @@ UsermapStatus usermap_add_uid(UserMap *map, uid_t from, uid_t to)
         } else {
             map->user_capacity *= 2;
         }
-        map->user_from = (uid_t*)realloc(map->user_from, map->user_capacity * sizeof(uid_t));
-        map->user_to = (uid_t*)realloc(map->user_to, map->user_capacity * sizeof(uid_t));
+        map->user_uid_from = (uid_t*)realloc(map->user_uid_from, map->user_capacity * sizeof(uid_t));
+        map->user_uid_to = (uid_t*)realloc(map->user_uid_to, map->user_capacity * sizeof(uid_t));
     }
     if (usermap_get_uid_or_default(map, from, -1) != -1) {
         return usermap_status_duplicate_key;
     }
     i = map->user_size;
-    map->user_from[i] = from;
-    map->user_to[i] = to;
+    map->user_uid_from[i] = from;
+    map->user_uid_to[i] = to;
     map->user_size += 1;
     return usermap_status_ok;
 }
 
-UsermapStatus usermap_add_gid(UserMap *map, gid_t from, gid_t to)
+UsermapStatus usermap_add_gid(UserMap *map, uid_t uid_from, gid_t gid_from, gid_t gid_to)
 {
     int i;
-    if (from == to) {
+    if (gid_from == gid_to) {
         return usermap_status_ok;
     }
     if (map->group_size == map->group_capacity) {
@@ -74,15 +77,17 @@ UsermapStatus usermap_add_gid(UserMap *map, gid_t from, gid_t to)
         } else {
             map->group_capacity *= 2;
         }
-        map->group_from = (gid_t*)realloc(map->group_from, map->group_capacity * sizeof(gid_t));
-        map->group_to = (gid_t*)realloc(map->group_to, map->group_capacity * sizeof(gid_t));
+        map->group_uid_from = (uid_t*)realloc(map->group_uid_from, map->group_capacity * sizeof(uid_t));
+        map->group_gid_from = (gid_t*)realloc(map->group_gid_from, map->group_capacity * sizeof(gid_t));
+        map->group_gid_to = (gid_t*)realloc(map->group_gid_to, map->group_capacity * sizeof(gid_t));
     }
-    if (usermap_get_gid_or_default(map, from, -1) != -1) {
+    if (usermap_get_gid_or_default(map, uid_from, gid_from, -1) != -1) {
         return usermap_status_duplicate_key;
     }
     i = map->group_size;
-    map->group_from[i] = from;
-    map->group_to[i] = to;
+    map->group_uid_from[i] = uid_from;
+    map->group_gid_from[i] = gid_from;
+    map->group_gid_to[i] = gid_to;
     map->group_size += 1;
     return usermap_status_ok;
 }
@@ -100,19 +105,19 @@ uid_t usermap_get_uid_or_default(UserMap *map, uid_t u, uid_t deflt)
 {
     int i;
     for (i = 0; i < map->user_size; ++i) {
-        if (map->user_from[i] == u) {
-            return map->user_to[i];
+        if (map->user_uid_from[i] == u) {
+            return map->user_uid_to[i];
         }
     }
     return deflt;
 }
 
-gid_t usermap_get_gid_or_default(UserMap *map, gid_t g, gid_t deflt)
+gid_t usermap_get_gid_or_default(UserMap *map, uid_t u, gid_t g, gid_t deflt)
 {
     int i;
     for (i = 0; i < map->group_size; ++i) {
-        if (map->group_from[i] == g) {
-            return map->group_to[i];
+        if (map->group_gid_from[i] == g && (map->group_uid_from[i] == u || map->group_uid_from[i] == (gid_t)-1)) {
+            return map->group_gid_to[i];
         }
     }
     return deflt;

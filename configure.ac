@@ -1,4 +1,4 @@
-AC_INIT([bindfs],[1.15.1],[martin.partel@gmail.com])
+AC_INIT([bindfs],[1.15.1-hypahub],[admin@hypahub.com])
 
 AM_INIT_AUTOMAKE([foreign serial-tests])
 AC_CONFIG_HEADERS([config.h])

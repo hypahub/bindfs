@@ -423,7 +423,7 @@ static int getattr_common(const char *procpath, struct stat *stbuf)
 
     /* Possibly map user/group */
     stbuf->st_uid = usermap_get_uid_or_default(settings.usermap, stbuf->st_uid, stbuf->st_uid);
-    stbuf->st_gid = usermap_get_gid_or_default(settings.usermap, stbuf->st_gid, stbuf->st_gid);
+    stbuf->st_gid = usermap_get_gid_or_default(settings.usermap, stbuf->st_uid, stbuf->st_gid, stbuf->st_gid);
 
     if (!apply_uid_offset(&stbuf->st_uid)) {
         return -UID_GID_OVERFLOW_ERRNO;
@@ -521,7 +521,7 @@ static int chown_new_file(const char *path, struct fuse_context *fc, int (*chown
     }
 
     file_owner = usermap_get_uid_or_default(settings.usermap_reverse, fc->uid, file_owner);
-    file_group = usermap_get_gid_or_default(settings.usermap_reverse, fc->gid, file_group);
+    file_group = usermap_get_gid_or_default(settings.usermap_reverse, fc->uid, fc->gid, file_group);
 
     if (file_owner != (uid_t)-1) {
         if (!unapply_uid_offset(&file_owner)) {
@@ -1137,7 +1137,7 @@ static int bindfs_chown(const char *path, uid_t uid, gid_t gid)
     if (gid != -1) {
         switch (settings.chgrp_policy) {
         case CHGRP_NORMAL:
-            gid = usermap_get_gid_or_default(settings.usermap_reverse, gid, gid);
+            gid = usermap_get_gid_or_default(settings.usermap_reverse, uid, gid, gid);
             if (!unapply_gid_offset(&gid)) {
                 return -UID_GID_OVERFLOW_ERRNO;
             }
@@ -1986,6 +1986,10 @@ static int parse_mirrored_users(char* mirror)
     return 1;
 }
 
+static UsermapStatus usermap_add_global_gid(UserMap *map, gid_t gid_from, gid_t gid_to) {
+    return usermap_add_gid(map, (uid_t)-1, gid_from, gid_to);
+}
+
 /*
  * Reads a passwd or group file (like /etc/passwd and /etc/group) and
  * adds all entries to the map. Useful for restoring backups
@@ -2011,7 +2015,7 @@ static int parse_map_file(UserMap *map, UserMap *reverse_map, char *file, int as
     const char *label_name, *label_id;
     if (as_gid) {
         value_to_id = &group_gid;
-        usermap_add = &usermap_add_gid;
+        usermap_add = &usermap_add_global_gid;
         label_name = "group";
         label_id = "GID";
     } else {
@@ -2087,74 +2091,141 @@ exit:
     return result;
 }
 
+static int decode_group(char *spec, char **user, char **group) {
+    *group = strchr(spec, '@');
+    if (!*group) {
+        /* Groups always have an @ sigil */
+        return 0;
+    }
+
+    /* strdup to preserve the spec so it can still be used in error messages. */
+    if (spec == *group) {
+        *user = NULL;
+        *group = strdup(*group + strlen("@"));
+    }
+    else {
+        *user = strndup(spec, *group - spec);
+        *group = strdup(*group + strlen("@"));
+    }
+
+    return 1;
+}
+
 static int parse_user_map(UserMap *map, UserMap *reverse_map, char *spec)
 {
     char *p = spec;
     char *tmpstr = NULL;
     char *q;
+    char *user = NULL, *group = NULL;
+    size_t sep;
+    char divider;
     uid_t uid_from, uid_to;
     gid_t gid_from, gid_to;
     UsermapStatus status;
+
+    enum Direction {
+        DIRECTION_BOTH,
+        DIRECTION_MAP,
+        DIRECTION_REVERSE_MAP,
+    } direction;
 
     while (*p != '\0') {
         free(tmpstr);
         tmpstr = strdup_until(p, ",:");
 
-        if (tmpstr[0] == '@') { /* group */
-            q = strstr(tmpstr, "/@");
-            if (!q) {
+        sep = strcspn(tmpstr, "/<>");
+        if (sep == 0) {
+            fprintf(stderr, "Invalid syntax: expected user1/user2 or @group1/@group2 but got `%s`\n", tmpstr);
+            goto fail;
+        }
+        divider = tmpstr[sep];
+        if (divider == 0) {
+            fprintf(stderr, "Invalid syntax: expected user1/user2 or @group1/@group2 but got `%s`\n", tmpstr);
+            goto fail;
+        }
+        direction = divider == '>' ? DIRECTION_MAP :
+                    divider == '<' ? DIRECTION_REVERSE_MAP :
+                    DIRECTION_BOTH;
+
+        tmpstr[sep] = '\0';
+        q = tmpstr + sep + strlen("/");
+
+        if (strchr(tmpstr, '@')) { /* group */
+            uid_from = (uid_t)-1;
+            gid_from = (gid_t)-1;
+            if (!decode_group(tmpstr, &user, &group)) {
                 fprintf(stderr, "Invalid syntax: expected @group1/@group2 but got `%s`\n", tmpstr);
                 goto fail;
             }
-            *q = '\0';
-            if (!group_gid(tmpstr + 1, &gid_from)) {
-                fprintf(stderr, "Invalid group: %s\n", tmpstr + 1);
+            if (user && !user_uid(user, &uid_from)) {
+                fprintf(stderr, "Invalid username: %s\n", user);
                 goto fail;
             }
-            q += strlen("/@");
-            if (!group_gid(q, &gid_to)) {
-                fprintf(stderr, "Invalid group: %s\n", q);
+            if (!group_gid(group, &gid_from)) {
+                fprintf(stderr, "Invalid group: %s\n", group);
                 goto fail;
             }
+            free(user);
+            free(group);
+            user = group = NULL;
 
-            status = usermap_add_gid(map, gid_from, gid_to);
-            if (status != 0) {
-                fprintf(stderr, "%s\n", usermap_errorstr(status));
+            uid_to = (uid_t)-1;
+            gid_to = (gid_t)-1;
+            if (!decode_group(q, &user, &group)) {
+                fprintf(stderr, "Invalid syntax: expected @group1/@group2 but got `%s`\n", q);
                 goto fail;
             }
-            status = usermap_add_gid(reverse_map, gid_to, gid_from);
-            if (status != 0) {
-                fprintf(stderr, "%s\n", usermap_errorstr(status));
+            if (user && !user_uid(user, &uid_to)) {
+                fprintf(stderr, "Invalid username: %s\n", user);
                 goto fail;
+            }
+            if (!group_gid(group, &gid_to)) {
+                fprintf(stderr, "Invalid group: %s\n", group);
+                goto fail;
+            }
+            free(user);
+            free(group);
+            user = group = NULL;
+
+            if (direction == DIRECTION_BOTH || direction == DIRECTION_MAP) {
+                status = usermap_add_gid(map, uid_from, gid_from, gid_to);
+                if (status != 0) {
+                    fprintf(stderr, "%s: %u@%u\n", usermap_errorstr(status), uid_from, gid_from);
+                    goto fail;
+                }
+            }
+            if (direction == DIRECTION_BOTH || direction == DIRECTION_REVERSE_MAP) {
+                status = usermap_add_gid(reverse_map, uid_to, gid_to, gid_from);
+                if (status != 0) {
+                    fprintf(stderr, "%s: %u@%u\n", usermap_errorstr(status), uid_to, gid_to);
+                    goto fail;
+                }
             }
 
         } else {
 
-            q = strstr(tmpstr, "/");
-            if (!q) {
-                fprintf(stderr, "Invalid syntax: expected user1/user2 but got `%s`\n", tmpstr);
-                goto fail;
-            }
-            *q = '\0';
             if (!user_uid(tmpstr, &uid_from)) {
                 fprintf(stderr, "Invalid username: %s\n", tmpstr);
                 goto fail;
             }
-            q += strlen("/");
             if (!user_uid(q, &uid_to)) {
                 fprintf(stderr, "Invalid username: %s\n", q);
                 goto fail;
             }
 
-            status = usermap_add_uid(map, uid_from, uid_to);
-            if (status != 0) {
-                fprintf(stderr, "%s\n", usermap_errorstr(status));
-                goto fail;
+            if (direction == DIRECTION_BOTH || direction == DIRECTION_MAP) {
+                status = usermap_add_uid(map, uid_from, uid_to);
+                if (status != 0) {
+                    fprintf(stderr, "%s: %u\n", usermap_errorstr(status), uid_from);
+                    goto fail;
+                }
             }
-            status = usermap_add_uid(reverse_map, uid_to, uid_from);
-            if (status != 0) {
-                fprintf(stderr, "%s\n", usermap_errorstr(status));
-                goto fail;
+            if (direction == DIRECTION_BOTH || direction == DIRECTION_REVERSE_MAP) {
+                status = usermap_add_uid(reverse_map, uid_to, uid_from);
+                if (status != 0) {
+                    fprintf(stderr, "%s: %u\n", usermap_errorstr(status), uid_to);
+                    goto fail;
+                }
             }
         }
 
@@ -2170,6 +2241,8 @@ static int parse_user_map(UserMap *map, UserMap *reverse_map, char *spec)
     return 1;
 
 fail:
+    free(user);
+    free(group);
     free(tmpstr);
     return 0;
 }
