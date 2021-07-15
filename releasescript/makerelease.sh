@@ -40,7 +40,11 @@ cp "bindfs-$VERSION/ChangeLog" ./docs/ChangeLog.utf8.txt
 cp "bindfs-$VERSION/src/bindfs.1" ./docs/bindfs.1
 
 # Create the HTML man page
-rman -f HTML -r "" docs/bindfs.1 > docs/bindfs.1.html
+if type rman >/dev/null; then
+    rman -f HTML -r "" docs/bindfs.1 > docs/bindfs.1.html
+else
+    echo >&2 'warning: rman missing, not making HTML manual pages!'
+fi
 
 # Compile the source
 pushd "bindfs-$VERSION"
